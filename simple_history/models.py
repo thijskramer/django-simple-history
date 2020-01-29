@@ -235,17 +235,21 @@ class HistoricalRecords:
             attrs["__module__"] = models_module
 
         # Get the primary key to the history model this model will look up to
-        attrs['history'] = models.ForeignKey(
+        attrs["m2m_history_id"] = self._get_history_id_field()
+        attrs["history"] = models.ForeignKey(
             model,
             db_constraint=False,
             on_delete=models.DO_NOTHING,
         )
 
-        for field in through_model._meta.fields:
+        """for field in through_model._meta.fields:
             f = copy.copy(field)
             if isinstance(f, models.ForeignKey):
                 f.__class__ = models.BigIntegerField
             attrs[f.name + '_id'] = f
+        """
+        fields = self.copy_fields(through_model)
+        attrs.update(fields)
 
         # Set as the default then check for overrides
         name = self.get_history_model_name(through_model)
@@ -261,13 +265,11 @@ class HistoricalRecords:
 
         history_model = type(str(name), (models.Model,), attrs)
 
-        foo = (
+        return (
             python_2_unicode_compatible(history_model)
             if django.VERSION < (2,)
             else history_model
         )
-
-        return foo
 
     def create_history_model(self, model, inherited):
         """
@@ -406,20 +408,6 @@ class HistoricalRecords:
             )
         else:
             history_id_field = models.AutoField(primary_key=True)
-
-        return history_id_field
-
-    def _get_m2m_history_id_field(self):
-        if self.history_id_field:
-            history_id_field = self.history_id_field
-            history_id_field.primary_key = False
-            history_id_field.editable = False
-        elif getattr(settings, "SIMPLE_HISTORY_HISTORY_ID_USE_UUID", False):
-            history_id_field = models.UUIDField(
-                primary_key=False, default=uuid.uuid4, editable=False
-            )
-        else:
-            history_id_field = models.BigIntegerField(editable=False)
 
         return history_id_field
 
@@ -633,8 +621,7 @@ class HistoricalRecords:
                 insert_row = {'history': history_instance}
 
                 for through_model_field in through_model._meta.fields:
-                    if isinstance(through_model_field, models.ForeignKey):
-                        insert_row[through_model_field.name] = getattr(row,  through_model_field.name).pk
+                    insert_row[through_model_field.name] = getattr(row,  through_model_field.name)
 
                 m2m_history_model.objects.create(**insert_row)
 
