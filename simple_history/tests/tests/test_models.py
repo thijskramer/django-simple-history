@@ -82,6 +82,8 @@ from ..models import (
     PollWithExcludedFKField,
     PollWithExcludeFields,
     PollWithHistoricalIPAddress,
+    PollWithManyToMany,
+    HistoricalPollWithManyToMany_places,
     Province,
     Restaurant,
     SelfFK,
@@ -1637,6 +1639,227 @@ class ForeignKeyToSelfTest(TestCase):
         self.assertEqual(
             self.model, self.history_model.fk_to_self_using_str.field.remote_field.model
         )
+
+
+class ManyToManyTest(TestCase):
+    def setUp(self):
+        self.model = PollWithManyToMany
+        self.history_model = self.model.history.model
+        self.place = Place.objects.create(name='Home')
+        self.poll = PollWithManyToMany.objects.create(
+            question="what's up?", pub_date=today
+        )
+
+    def assertDatetimesEqual(self, time1, time2):
+        self.assertAlmostEqual(time1, time2, delta=timedelta(seconds=2))
+
+    def assertRecordValues(self, record, klass, values_dict):
+        for key, value in values_dict.items():
+            self.assertEqual(getattr(record, key), value)
+        self.assertEqual(record.history_object.__class__, klass)
+        for key, value in values_dict.items():
+            if key not in ["history_type", "history_change_reason"]:
+                self.assertEqual(getattr(record.history_object, key), value)
+
+    def test_create(self):
+        # There should be 1 history record for our poll, the create from setUp
+        self.assertEqual(self.poll.history.all().count(), 1)
+
+        # The created history row should be normal and correct
+        (record,) = self.poll.history.all()
+        self.assertRecordValues(
+            record,
+            self.model,
+            {
+                "question": "what's up?",
+                "pub_date": today,
+                "id": self.poll.id,
+                "history_type": "+",
+            },
+        )
+        self.assertDatetimesEqual(record.history_date, datetime.now())
+
+        historical_poll = self.poll.history.most_recent()
+
+        # There should be no places associated with the current poll yet
+        self.assertEqual(historical_poll.historical_places.count(), 0)
+
+        # Add a many-to-many child
+        self.poll.places.add(self.place)
+
+        # A new history row has been created by adding the M2M
+        self.assertEqual(self.poll.history.all().count(), 2)
+
+        # The new row has a place attached to it
+        m2m_record = self.poll.history.most_recent()
+        self.assertEqual(m2m_record.places.count(), 1)
+
+        # And the historical place is the correct one
+        historical_place = m2m_record.historical_places.first()
+        self.assertEqual(historical_place.place, self.place.id)
+
+    def test_remove(self):
+        # Add and remove a many-to-many child
+        self.poll.places.add(self.place)
+        self.poll.places.remove(self.place)
+
+        # Two new history exist for the place add & remove
+        self.assertEqual(self.poll.history.all().count(), 3)
+
+        # The newest row has no place attached to it
+        m2m_record = self.poll.history.all()[0]
+        self.assertEqual(m2m_record.historical_places.count(), 0)
+
+        # The previous one should have one place
+        previous_m2m_record = m2m_record.prev_record
+        self.assertEqual(previous_m2m_record.historical_places.count(), 1)
+
+        # And the previous row still has the correct one
+        historical_place = previous_m2m_record.historical_places.first()
+        self.assertEqual(historical_place.place, self.place.id)
+
+    def test_clear(self):
+        # Add some places
+        place_2 = Place.objects.create(name="Place 2")
+        place_3 = Place.objects.create(name="Place 3")
+        place_4 = Place.objects.create(name="Place 4")
+        self.poll.places.add(self.place)
+        self.poll.places.add(place_2)
+        self.poll.places.add(place_3)
+        self.poll.places.add(place_4)
+
+        # Should be 5 history rows, one for the create, one from each add
+        self.assertEqual(self.poll.history.all().count(), 5)
+
+        # Most recent should have 4 places
+        m2m_record = self.poll.history.all()[0]
+        self.assertEqual(m2m_record.historical_places.all().count(), 4)
+
+        # Previous one should have 3
+        prev_record = m2m_record.prev_record
+        self.assertEqual(prev_record.historical_places.all().count(), 3)
+
+        # Clear all places
+        self.poll.places.clear()
+
+        # Clearing M2M should create a new history entry
+        self.assertEqual(self.poll.history.all().count(), 6)
+
+        # Most recent should have no places
+        m2m_record = self.poll.history.all()[0]
+        self.assertEqual(m2m_record.historical_places.all().count(), 0)
+
+    def test_delete_child(self):
+        # Add a place
+        original_place_id = self.place.id
+        self.poll.places.add(self.place)
+        self.assertEqual(self.poll.history.all().count(), 2)
+
+        # Delete the place instance
+        self.place.delete()
+
+        # No new history row is created when the Place is deleted
+        self.assertEqual(self.poll.history.all().count(), 2)
+
+        # The newest row still has a place attached to it
+        m2m_record = self.poll.history.all()[0]
+        self.assertEqual(m2m_record.historical_places.count(), 1)
+
+        # place is just the ID of the original Place instance
+        historical_place = m2m_record.historical_places.first()
+        self.assertEqual(historical_place.place, original_place_id)
+
+    def test_delete_parent(self):
+        # Add a place
+        self.poll.places.add(self.place)
+        self.assertEqual(self.poll.history.all().count(), 2)
+
+        # Delete the poll instance
+        self.poll.delete()
+
+        # History row is created when the Poll is deleted, but all m2m relations have
+        # been deleted
+        self.assertEqual(self.model.history.all().count(), 3)
+
+        # Confirm the newest row (the delete) has no relations
+        m2m_record = self.model.history.all()[0]
+        self.assertEqual(m2m_record.historical_places.count(), 0)
+
+        # Confirm the previous row still has one
+        prev_record = m2m_record.prev_record
+        self.assertEqual(prev_record.historical_places.count(), 1)
+
+        # And it is the correct one
+        historical_place = prev_record.historical_places.first()
+        self.assertEqual(historical_place.place, self.place.id)
+
+    def test_update_child(self):
+        self.poll.places.add(self.place)
+
+        # Only two history rows, one for create and one for the M2M add
+        self.assertEqual(self.poll.history.all().count(), 2)
+
+        self.place.name = "Updated"
+        self.place.save()
+
+        # Updating the referenced M2M does not add history
+        self.assertEqual(self.poll.history.all().count(), 2)
+
+        # The newest row has the updated place
+        m2m_record = self.poll.history.all()[0]
+        self.assertEqual(m2m_record.historical_places.count(), 1)
+        historical_place = m2m_record.historical_places.first()
+        self.assertEqual(Place.objects.get(pk=historical_place.place).name, "Updated")
+
+    def test_update_parent(self):
+        self.poll.places.add(self.place)
+
+        # Only two history rows, one for create and one for the M2M add
+        self.assertEqual(self.poll.history.all().count(), 2)
+
+        self.poll.question = "Updated?"
+        self.poll.save()
+
+        # Updating the model with the M2M on it creates new history
+        self.assertEqual(self.poll.history.all().count(), 3)
+
+        # The newest row still has the associated Place
+        m2m_record = self.poll.history.all()[0]
+        self.assertEqual(m2m_record.historical_places.count(), 1)
+        historical_place = m2m_record.historical_places.first()
+        self.assertEqual(historical_place.place, self.place.id)
+
+    def test_bulk_add_remove(self):
+        # Add some places
+        place_2 = Place.objects.create(name="Place 2")
+        place_3 = Place.objects.create(name="Place 3")
+        place_4 = Place.objects.create(name="Place 4")
+
+        # Bulk add all of the places
+        self.poll.places.add(*Place.objects.all())
+
+        # Should be 2 history rows, one for the create, one from the bulk add
+        self.assertEqual(self.poll.history.all().count(), 2)
+
+        # Most recent should have 4 places
+        m2m_record = self.poll.history.all()[0]
+        self.assertEqual(m2m_record.historical_places.all().count(), 4)
+
+        # Previous one should have 0
+        prev_record = m2m_record.prev_record
+        self.assertEqual(prev_record.historical_places.all().count(), 0)
+
+        # Remove all places but the first
+        self.poll.places.remove(*Place.objects.filter(id__gt=1))
+
+        self.assertEqual(self.poll.history.all().count(), 3)
+
+        # Most recent should only have the first Place remaining
+        m2m_record = self.poll.history.all()[0]
+        self.assertEqual(m2m_record.historical_places.all().count(), 1)
+
+        historical_place = m2m_record.historical_places.first()
+        self.assertEqual(historical_place.place, self.place.id)
 
 
 @override_settings(**database_router_override_settings)

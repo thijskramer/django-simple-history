@@ -23,7 +23,7 @@ from django.utils.translation import gettext_lazy as _
 from simple_history import utils
 
 from . import exceptions
-from .manager import HistoryDescriptor
+from .manager import HistoryDescriptor, M2MHistoryDescriptor
 from .signals import post_create_historical_record, pre_create_historical_record
 from .utils import get_change_reason_from_object
 
@@ -59,6 +59,7 @@ def _history_user_setter(historical_instance, user):
 
 class HistoricalRecords:
     thread = context = LocalContext()  # retain thread for backwards compatibility
+    m2m_models = {}
 
     def __init__(
         self,
@@ -161,6 +162,7 @@ class HistoricalRecords:
                 )
             )
         history_model = self.create_history_model(sender, inherited)
+
         if inherited:
             # Make sure history model is in same module as concrete model
             module = importlib.import_module(history_model.__module__)
@@ -179,6 +181,20 @@ class HistoricalRecords:
         descriptor = HistoryDescriptor(history_model)
         setattr(sender, self.manager_name, descriptor)
         sender._meta.simple_history_manager_attribute = self.manager_name
+
+        for field in self.m2m_fields:
+            m2m_model = self.create_history_m2m_model(
+                history_model,
+                field.remote_field.through
+            )
+            self.m2m_models[field] = m2m_model
+
+            module = importlib.import_module(self.module)
+            setattr(module, m2m_model.__name__, m2m_model)
+
+            m2m_descriptor = M2MHistoryDescriptor(m2m_model)
+            setattr(sender, "historical_{}".format(field.name), m2m_descriptor)
+            setattr(history_model, "historical_{}".format(field.name), m2m_descriptor)
 
     def get_history_model_name(self, model):
         if not self.custom_model_name:
@@ -201,6 +217,57 @@ class HistoricalRecords:
                 self.custom_model_name
             )
         )
+
+    def create_history_m2m_model(self, model, through_model):
+        attrs = {
+            "__module__": self.module,
+        }
+
+        app_module = "%s.models" % model._meta.app_label
+
+        if model.__module__ != self.module:
+            # registered under different app
+            attrs["__module__"] = self.module
+        elif app_module != self.module:
+            # Abuse an internal API because the app registry is loading.
+            app = apps.app_configs[model._meta.app_label]
+            models_module = app.name
+            attrs["__module__"] = models_module
+
+        # Get the primary key to the history model this model will look up to
+        attrs['history'] = models.ForeignKey(
+            model,
+            db_constraint=False,
+            on_delete=models.DO_NOTHING,
+        )
+
+        for field in through_model._meta.fields:
+            f = copy.copy(field)
+            if isinstance(f, models.ForeignKey):
+                f.__class__ = models.BigIntegerField
+            attrs[f.name + '_id'] = f
+
+        # Set as the default then check for overrides
+        name = self.get_history_model_name(through_model)
+
+        registered_models[through_model._meta.db_table] = through_model
+
+        meta_fields = {"verbose_name": name}
+
+        if self.app:
+            meta_fields["app_label"] = self.app
+
+        attrs.update(Meta=type(str("Meta"), (), meta_fields))
+
+        history_model = type(str(name), (models.Model,), attrs)
+
+        foo = (
+            python_2_unicode_compatible(history_model)
+            if django.VERSION < (2,)
+            else history_model
+        )
+
+        return foo
 
     def create_history_model(self, model, inherited):
         """
@@ -342,6 +409,20 @@ class HistoricalRecords:
 
         return history_id_field
 
+    def _get_m2m_history_id_field(self):
+        if self.history_id_field:
+            history_id_field = self.history_id_field
+            history_id_field.primary_key = False
+            history_id_field.editable = False
+        elif getattr(settings, "SIMPLE_HISTORY_HISTORY_ID_USE_UUID", False):
+            history_id_field = models.UUIDField(
+                primary_key=False, default=uuid.uuid4, editable=False
+            )
+        else:
+            history_id_field = models.BigIntegerField(editable=False)
+
+        return history_id_field
+
     def _get_history_user_fields(self):
         if self.user_id_field is not None:
             # Tracking user using explicit id rather than Django ForeignKey
@@ -386,7 +467,7 @@ class HistoricalRecords:
     def _get_many_to_many_fields(self):
         fields = {}
         for field in self.m2m_fields:
-            fields[field.name] = models.ManyToManyField(field.remote_field.model)
+            fields[field.name] = models.ManyToManyField(self.m2m_models[field])
         return fields
 
     def get_extra_fields(self, model, fields):
@@ -478,7 +559,7 @@ class HistoricalRecords:
 
         extra_fields.update(self._get_history_related_field(model))
         extra_fields.update(self._get_history_user_fields())
-        extra_fields.update(self._get_many_to_many_fields())
+        # extra_fields.update(self._get_many_to_many_fields())
 
         return extra_fields
 
@@ -537,27 +618,25 @@ class HistoricalRecords:
             self.create_historical_record(instance, "-", using=using)
 
     def m2m_changed(self, instance, action, attr, pk_set, reverse, **_):
-        if reverse:
-            # TODO - Reverse m2m update does not work
-            # HistoricalModel contains the ManyToManyField, so this call
-            # modifies the reverse relation
-            return
+        if action in ('post_add', 'post_remove', 'post_clear'):
+            self.create_historical_record(instance, "~")
 
-        if hasattr(instance, 'skip_history_when_saving'):
-            historical = instance.history.latest()
-        else:
-            # TODO - m2m update should create new version
-            # Currently updates latest version, but in fact should create new one
-            historical = None
+    def create_historical_record_m2ms(self, history_instance, instance):
+        for field in self.m2m_fields:
+            m2m_history_model = self.m2m_models[field]
+            original_instance = history_instance.instance
+            through_model = getattr(original_instance, field.name).through
 
-        field = getattr(historical, attr)
+            rows = through_model.objects.all()
 
-        if action == 'post_add':
-            field.add(*pk_set)
-        if action == 'post_remove':
-            field.remove(*pk_set)
-        if action == 'post_clear':
-            field.clear()
+            for row in rows:
+                insert_row = {'history': history_instance}
+
+                for through_model_field in through_model._meta.fields:
+                    if isinstance(through_model_field, models.ForeignKey):
+                        insert_row[through_model_field.name] = getattr(row,  through_model_field.name).pk
+
+                m2m_history_model.objects.create(**insert_row)
 
     def create_historical_record(self, instance, history_type, using=None):
         using = using if self.use_base_model_db else None
@@ -593,6 +672,7 @@ class HistoricalRecords:
         )
 
         history_instance.save(using=using)
+        self.create_historical_record_m2ms(history_instance, instance)
 
         post_create_historical_record.send(
             sender=manager.model,
