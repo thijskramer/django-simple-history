@@ -1768,7 +1768,7 @@ class ManyToManyTest(TestCase):
         # Place instance cannot be created...
         historical_place = m2m_record.historical_places.first()
         with self.assertRaises(ObjectDoesNotExist):
-            x = historical_place.place.id
+            historical_place.place.id
 
         # But the values persist
         historical_place_values = m2m_record.historical_places.all().values()[0]
@@ -1841,9 +1841,9 @@ class ManyToManyTest(TestCase):
 
     def test_bulk_add_remove(self):
         # Add some places
-        place_2 = Place.objects.create(name="Place 2")
-        place_3 = Place.objects.create(name="Place 3")
-        place_4 = Place.objects.create(name="Place 4")
+        Place.objects.create(name="Place 2")
+        Place.objects.create(name="Place 3")
+        Place.objects.create(name="Place 4")
 
         # Bulk add all of the places
         self.poll.places.add(*Place.objects.all())

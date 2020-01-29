@@ -621,7 +621,9 @@ class HistoricalRecords:
                 insert_row = {'history': history_instance}
 
                 for through_model_field in through_model._meta.fields:
-                    insert_row[through_model_field.name] = getattr(row,  through_model_field.name)
+                    insert_row[through_model_field.name] = getattr(
+                        row, through_model_field.name
+                    )
 
                 m2m_history_model.objects.create(**insert_row)
 
