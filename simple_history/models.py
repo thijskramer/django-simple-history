@@ -23,7 +23,7 @@ from django.utils.translation import gettext_lazy as _
 from simple_history import utils
 
 from . import exceptions
-from .manager import HistoryDescriptor, M2MHistoryDescriptor
+from .manager import HistoryDescriptor
 from .signals import post_create_historical_record, pre_create_historical_record
 from .utils import get_change_reason_from_object
 
@@ -192,7 +192,7 @@ class HistoricalRecords:
             module = importlib.import_module(self.module)
             setattr(module, m2m_model.__name__, m2m_model)
 
-            m2m_descriptor = M2MHistoryDescriptor(m2m_model)
+            m2m_descriptor = HistoryDescriptor(m2m_model)
             setattr(sender, "historical_{}".format(field.name), m2m_descriptor)
             setattr(history_model, "historical_{}".format(field.name), m2m_descriptor)
 
@@ -242,12 +242,6 @@ class HistoricalRecords:
             on_delete=models.DO_NOTHING,
         )
 
-        """for field in through_model._meta.fields:
-            f = copy.copy(field)
-            if isinstance(f, models.ForeignKey):
-                f.__class__ = models.BigIntegerField
-            attrs[f.name + '_id'] = f
-        """
         fields = self.copy_fields(through_model)
         attrs.update(fields)
 
@@ -452,12 +446,6 @@ class HistoricalRecords:
         else:
             return {}
 
-    def _get_many_to_many_fields(self):
-        fields = {}
-        for field in self.m2m_fields:
-            fields[field.name] = models.ManyToManyField(self.m2m_models[field])
-        return fields
-
     def get_extra_fields(self, model, fields):
         """Return dict of extra fields added to the historical record model"""
 
@@ -547,7 +535,6 @@ class HistoricalRecords:
 
         extra_fields.update(self._get_history_related_field(model))
         extra_fields.update(self._get_history_user_fields())
-        # extra_fields.update(self._get_many_to_many_fields())
 
         return extra_fields
 
@@ -607,6 +594,7 @@ class HistoricalRecords:
 
     def m2m_changed(self, instance, action, attr, pk_set, reverse, **_):
         if action in ('post_add', 'post_remove', 'post_clear'):
+            # It should be safe to ~ this since the row must exist to modify m2m on it
             self.create_historical_record(instance, "~")
 
     def create_historical_record_m2ms(self, history_instance, instance):
@@ -616,6 +604,7 @@ class HistoricalRecords:
             through_model = getattr(original_instance, field.name).through
 
             rows = through_model.objects.all()
+            insert_rows = []
 
             for row in rows:
                 insert_row = {'history': history_instance}
@@ -624,8 +613,9 @@ class HistoricalRecords:
                     insert_row[through_model_field.name] = getattr(
                         row, through_model_field.name
                     )
+                insert_rows.append(m2m_history_model(**insert_row))
 
-                m2m_history_model.objects.create(**insert_row)
+            m2m_history_model.objects.bulk_create(insert_rows)
 
     def create_historical_record(self, instance, history_type, using=None):
         using = using if self.use_base_model_db else None

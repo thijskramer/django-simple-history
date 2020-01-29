@@ -173,35 +173,3 @@ class HistoryManager(models.Manager):
         return self.model.objects.bulk_create(
             historical_instances, batch_size=batch_size
         )
-
-
-class M2MHistoryDescriptor(object):
-    def __init__(self, model):
-        self.model = model
-
-    def __get__(self, instance, owner):
-        if instance is None:
-            return M2MHistoryManager(self.model)
-        return M2MHistoryManager(self.model, instance)
-
-
-class M2MHistoryManager(models.Manager):
-    def __init__(self, model, instance=None):
-        super(M2MHistoryManager, self).__init__()
-        self.model = model
-        self.instance = instance
-
-    def get_super_queryset(self):
-        return super(M2MHistoryManager, self).get_queryset()
-
-    def get_queryset(self):
-        qs = self.get_super_queryset()
-
-        if self.instance is None:
-            return qs
-
-        if isinstance(self.instance._meta.pk, models.ForeignKey):
-            key_name = self.instance._meta.pk.name + "_id"
-        else:
-            key_name = self.instance._meta.pk.name
-        return self.get_super_queryset().filter(**{key_name: self.instance.pk})
