@@ -83,6 +83,7 @@ from ..models import (
     PollWithExcludeFields,
     PollWithHistoricalIPAddress,
     PollWithManyToMany,
+    PollWithSeveralManyToMany,
     HistoricalPollWithManyToMany_places,
     Province,
     Restaurant,
@@ -1639,6 +1640,46 @@ class ForeignKeyToSelfTest(TestCase):
         self.assertEqual(
             self.model, self.history_model.fk_to_self_using_str.field.remote_field.model
         )
+
+
+class SeveralManyToManyTest(TestCase):
+    def setUp(self):
+        self.model = PollWithSeveralManyToMany
+        self.history_model = self.model.history.model
+        self.place = Place.objects.create(name="Home")
+        self.book = Book.objects.create(isbn="1234")
+        self.restaurant = Restaurant.objects.create(rating=1)
+        self.poll = PollWithSeveralManyToMany.objects.create(
+            question="what's up?", pub_date=today
+        )
+
+    def test_separation(self):
+        self.assertEqual(self.poll.history.all().count(), 1)
+        self.poll.places.add(self.place)
+        self.poll.books.add(self.book)
+        self.poll.restaurants.add(self.restaurant)
+        self.assertEqual(self.poll.history.all().count(), 4)
+
+        restaurant, book, place, add = self.poll.history.all()
+
+        self.assertEqual(restaurant.restaurants.all().count(), 1)
+        self.assertEqual(restaurant.books.all().count(), 1)
+        self.assertEqual(restaurant.places.all().count(), 1)
+        self.assertEqual(restaurant.restaurants.first().restaurant, self.restaurant)
+
+        self.assertEqual(book.restaurants.all().count(), 0)
+        self.assertEqual(book.books.all().count(), 1)
+        self.assertEqual(book.places.all().count(), 1)
+        self.assertEqual(book.books.first().book, self.book)
+
+        self.assertEqual(place.restaurants.all().count(), 0)
+        self.assertEqual(place.books.all().count(), 0)
+        self.assertEqual(place.places.all().count(), 1)
+        self.assertEqual(place.places.first().place, self.place)
+
+        self.assertEqual(add.restaurants.all().count(), 0)
+        self.assertEqual(add.books.all().count(), 0)
+        self.assertEqual(add.places.all().count(), 0)
 
 
 class ManyToManyTest(TestCase):
