@@ -1813,12 +1813,9 @@ class ManyToManyTest(TestCase):
 
         # But the values persist
         historical_place_values = m2m_record.places.all().values()[0]
-        self.assertEqual(historical_place_values['history_id'], m2m_record.history_id)
-        self.assertEqual(historical_place_values['place_id'], original_place_id)
-        self.assertEqual(
-            historical_place_values['pollwithmanytomany_id'],
-            self.poll.id
-        )
+        self.assertEqual(historical_place_values["history_id"], m2m_record.history_id)
+        self.assertEqual(historical_place_values["place_id"], original_place_id)
+        self.assertEqual(historical_place_values["pollwithmanytomany_id"], self.poll.id)
 
     def test_delete_parent(self):
         # Add a place

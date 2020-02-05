@@ -175,8 +175,11 @@ class HistoricalRecords:
         models.signals.post_save.connect(self.post_save, sender=sender, weak=False)
         models.signals.post_delete.connect(self.post_delete, sender=sender, weak=False)
         for field in self.m2m_fields:
-            m2m_changed.connect(partial(self.m2m_changed, attr=field.name),
-                                sender=field.remote_field.through, weak=False)
+            m2m_changed.connect(
+                partial(self.m2m_changed, attr=field.name),
+                sender=field.remote_field.through,
+                weak=False,
+            )
 
         descriptor = HistoryDescriptor(history_model)
         setattr(sender, self.manager_name, descriptor)
@@ -184,8 +187,7 @@ class HistoricalRecords:
 
         for field in self.m2m_fields:
             m2m_model = self.create_history_m2m_model(
-                history_model,
-                field.remote_field.through
+                history_model, field.remote_field.through
             )
             self.m2m_models[field] = m2m_model
 
@@ -236,19 +238,14 @@ class HistoricalRecords:
         # Get the primary key to the history model this model will look up to
         attrs["m2m_history_id"] = self._get_history_id_field()
         attrs["history"] = models.ForeignKey(
-            model,
-            db_constraint=False,
-            on_delete=models.DO_NOTHING,
+            model, db_constraint=False, on_delete=models.DO_NOTHING,
         )
 
         fields = self.copy_fields(through_model)
         attrs.update(fields)
 
-        # Set as the default then check for overrides
         name = self.get_history_model_name(through_model)
-
         registered_models[through_model._meta.db_table] = through_model
-
         meta_fields = {"verbose_name": name}
 
         if self.app:
@@ -256,12 +253,12 @@ class HistoricalRecords:
 
         attrs.update(Meta=type(str("Meta"), (), meta_fields))
 
-        history_model = type(str(name), (models.Model,), attrs)
+        m2m_history_model = type(str(name), (models.Model,), attrs)
 
         return (
-            python_2_unicode_compatible(history_model)
+            python_2_unicode_compatible(m2m_history_model)
             if django.VERSION < (2,)
-            else history_model
+            else m2m_history_model
         )
 
     def create_history_model(self, model, inherited):
@@ -271,7 +268,7 @@ class HistoricalRecords:
         attrs = {
             "__module__": self.module,
             "_history_excluded_fields": self.excluded_fields,
-            "_history_m2m_fields": self.m2m_fields
+            "_history_m2m_fields": self.m2m_fields,
         }
 
         app_module = "%s.models" % model._meta.app_label
@@ -596,7 +593,7 @@ class HistoricalRecords:
         if hasattr(instance, "skip_history_when_saving"):
             return
 
-        if action in ('post_add', 'post_remove', 'post_clear'):
+        if action in ("post_add", "post_remove", "post_clear"):
             # It should be safe to ~ this since the row must exist to modify m2m on it
             self.create_historical_record(instance, "~")
 
@@ -610,12 +607,10 @@ class HistoricalRecords:
 
             through_field_name = type(original_instance).__name__.lower()
 
-            rows = through_model.objects.filter(
-                **{through_field_name: instance}
-            )
+            rows = through_model.objects.filter(**{through_field_name: instance})
 
             for row in rows:
-                insert_row = {'history': history_instance}
+                insert_row = {"history": history_instance}
 
                 for through_model_field in through_model._meta.fields:
                     insert_row[through_model_field.name] = getattr(
