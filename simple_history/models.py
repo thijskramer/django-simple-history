@@ -193,8 +193,7 @@ class HistoricalRecords:
             setattr(module, m2m_model.__name__, m2m_model)
 
             m2m_descriptor = HistoryDescriptor(m2m_model)
-            setattr(sender, "historical_{}".format(field.name), m2m_descriptor)
-            setattr(history_model, "historical_{}".format(field.name), m2m_descriptor)
+            setattr(history_model, field.name, m2m_descriptor)
 
     def get_history_model_name(self, model):
         if not self.custom_model_name:
@@ -272,6 +271,7 @@ class HistoricalRecords:
         attrs = {
             "__module__": self.module,
             "_history_excluded_fields": self.excluded_fields,
+            "_history_m2m_fields": self.m2m_fields
         }
 
         app_module = "%s.models" % model._meta.app_label
@@ -593,6 +593,9 @@ class HistoricalRecords:
             self.create_historical_record(instance, "-", using=using)
 
     def m2m_changed(self, instance, action, attr, pk_set, reverse, **_):
+        if hasattr(instance, "skip_history_when_saving"):
+            return
+
         if action in ('post_add', 'post_remove', 'post_clear'):
             # It should be safe to ~ this since the row must exist to modify m2m on it
             self.create_historical_record(instance, "~")
@@ -603,8 +606,13 @@ class HistoricalRecords:
             original_instance = history_instance.instance
             through_model = getattr(original_instance, field.name).through
 
-            rows = through_model.objects.all()
             insert_rows = []
+
+            through_field_name = type(original_instance).__name__.lower()
+
+            rows = through_model.objects.filter(
+                **{through_field_name: instance}
+            )
 
             for row in rows:
                 insert_row = {'history': history_instance}
@@ -750,6 +758,15 @@ class HistoricalChanges:
             if old_value != current_value:
                 changes.append(ModelChange(field, old_value, current_value))
                 changed_fields.append(field)
+
+        for field in old_history._history_m2m_fields:
+            old_rows = list(getattr(old_history, field.name).values_list())
+            new_rows = list(getattr(self, field.name).values_list())
+
+            if old_rows != new_rows:
+                change = ModelChange(field.name, old_rows, new_rows)
+                changes.append(change)
+                changed_fields.append(field.name)
 
         return ModelDelta(changes, changed_fields, old_history, self)
 
