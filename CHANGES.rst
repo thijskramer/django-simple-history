@@ -26,6 +26,7 @@ Full list of changes:
 - Russian translations update (gh-897)
 - Add Python 3.10 to test matrix (gh-899)
 - Added support for Django 4.0 (gh-898)
+- Add basic support for many-to-many fields (gh-399)
 
 3.0.0 (2021-04-16)
 ------------------

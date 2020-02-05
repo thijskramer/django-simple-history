@@ -222,6 +222,9 @@ class HistoricalRecords:
     def create_history_m2m_model(self, model, through_model):
         attrs = {
             "__module__": self.module,
+            "__str__": lambda self: "{} as of {}".format(
+                self._meta.verbose_name, self.history.history_date
+            ),
         }
 
         app_module = "%s.models" % model._meta.app_label
