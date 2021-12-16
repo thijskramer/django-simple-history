@@ -258,11 +258,7 @@ class HistoricalRecords:
 
         m2m_history_model = type(str(name), (models.Model,), attrs)
 
-        return (
-            python_2_unicode_compatible(m2m_history_model)
-            if django.VERSION < (2,)
-            else m2m_history_model
-        )
+        return m2m_history_model
 
     def create_history_model(self, model, inherited):
         """
