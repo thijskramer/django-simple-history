@@ -241,7 +241,9 @@ class HistoricalRecords:
         # Get the primary key to the history model this model will look up to
         attrs["m2m_history_id"] = self._get_history_id_field()
         attrs["history"] = models.ForeignKey(
-            model, db_constraint=False, on_delete=models.DO_NOTHING,
+            model,
+            db_constraint=False,
+            on_delete=models.DO_NOTHING,
         )
 
         fields = self.copy_fields(through_model)
@@ -754,8 +756,21 @@ class HistoricalChanges:
                 changed_fields.append(field)
 
         for field in old_history._history_m2m_fields:
-            old_rows = list(getattr(old_history, field.name).values_list())
-            new_rows = list(getattr(self, field.name).values_list())
+            reference_history_m2m_item = (
+                getattr(old_history, field.name).first()
+                or getattr(self, field.name).first()
+            )
+            history_field_names = []
+            if reference_history_m2m_item:
+                history_field_names = [
+                    f.name
+                    for f in reference_history_m2m_item._meta.fields
+                    if f.name not in ["id", "m2m_history_id", "history"]
+                ]
+            old_rows = list(
+                getattr(old_history, field.name).values(*history_field_names)
+            )
+            new_rows = list(getattr(self, field.name).values(*history_field_names))
 
             if old_rows != new_rows:
                 change = ModelChange(field.name, old_rows, new_rows)
